@@ -14,12 +14,12 @@ public class TextureCompressionViewerWindow : EditorWindow
     private Texture2D previewA;
     private Texture2D previewB;
 
-    private string tempFolderName = "Temp";
-    private string tempFolderParent = "Assets/Texture Compression Viewer";
-    private string tempFolder = "Assets/Texture Compression Viewer/Temp";
+    private const string TempFolderName = "Temp";
+    private const string TempFolderParent = "Assets/Texture Compression Viewer";
+    private const string TempFolder = "Assets/Texture Compression Viewer/Temp";
     private string tempAPath;
     private string tempBPath;
-    
+
     private const string PlatformName = "Android";
 
     public TextureImporterFormat formatA = TextureImporterFormat.Automatic;
@@ -33,6 +33,13 @@ public class TextureCompressionViewerWindow : EditorWindow
     private bool autoUpdate = true;
     private float handlePos = 0.5f;
     private bool dragging = false;
+    
+    private float zoom = 1.0f;
+    private const float MinZoom = 0.1f;
+    private const float MaxZoom = 5.0f;
+    
+    private bool previewWithoutFiltering = false;
+    private Toggle previewWithoutFilteringToggle;
 
     private static readonly List<TextureImporterFormat> CompressionFormats = new()
     {
@@ -61,15 +68,15 @@ public class TextureCompressionViewerWindow : EditorWindow
         TextureImporterFormat.ASTC_HDR_10x10,
         TextureImporterFormat.ASTC_HDR_12x12,
     };
-    
+
     private List<int> sizeOptions = new List<int> { 32, 64, 128, 256, 512, 1024, 2048, 4096 };
 
     // UI elements
     private ObjectField sourceField;
     private PopupField<TextureImporterFormat> formatAField;
     private PopupField<TextureImporterFormat> formatBField;
-    private SliderInt compressionQualityA_Slider;
-    private SliderInt compressionQualityB_Slider;
+    private SliderInt compressionQualityASlider;
+    private SliderInt compressionQualityBSlider;
     private PopupField<int> maxSizeAField;
     private PopupField<int> maxSizeBField;
     private Toggle autoUpdateToggle;
@@ -78,8 +85,8 @@ public class TextureCompressionViewerWindow : EditorWindow
     private IMGUIContainer previewContainer;
     private Label textureStatsALabel;
     private Label textureStatsBLabel;
-    
-    private string[] compressPrefKeys = { "kCompressTexturesOnImport", "CompressTexturesOnImport", "CompressAssetsOnImport" };
+
+    private readonly string[] compressPrefKeys = { "kCompressTexturesOnImport", "CompressTexturesOnImport", "CompressAssetsOnImport" };
     private Dictionary<string, bool> prevImportCompressSetKeys = new();
 
     [Flags]
@@ -99,7 +106,7 @@ public class TextureCompressionViewerWindow : EditorWindow
         w.minSize = new Vector2(600, 360);
     }
 
-    // --- New: project-window context menu to open this preview on a selected texture ---
+    // Project window context
     [MenuItem("Assets/Texture Compression Preview", false, 1000)]
     private static void OpenFromProjectMenu()
     {
@@ -108,28 +115,25 @@ public class TextureCompressionViewerWindow : EditorWindow
         {
             return;
         }
-        
+
         var w = GetWindow<TextureCompressionViewerWindow>("Texture Compression Viewer");
         w.minSize = new Vector2(600, 360);
         w.SetSourceTextureFromAsset(tex);
     }
 
-    [MenuItem("Assets/Texture Compression Viewer", true)]
-    private static bool OpenFromProjectMenuValidation()
-    {
-        return Selection.activeObject is Texture2D;
-    }
+    [MenuItem("Assets/Texture Compression Preview", true)]
+    private static bool OpenFromProjectMenuValidation() => Selection.activeObject is Texture2D;
 
     private void OnEnable()
     {
         CleanupPreviewFiles();
 
-        if (!AssetDatabase.IsValidFolder(tempFolder))
+        if (!AssetDatabase.IsValidFolder(TempFolder))
         {
-            Directory.CreateDirectory(tempFolder);
+            Directory.CreateDirectory(TempFolder);
             AssetDatabase.Refresh();
         }
-        
+
         BuildUI();
     }
 
@@ -141,7 +145,7 @@ public class TextureCompressionViewerWindow : EditorWindow
     private void BuildUI()
     {
         rootVisualElement.Clear();
-        
+
         if (EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android)
         {
             compressPrefWarning = new Label
@@ -159,31 +163,50 @@ public class TextureCompressionViewerWindow : EditorWindow
             rootVisualElement.Add(compressPrefWarning);
         }
 
-        // Main content split
-        var content = new VisualElement { style =
+        // Main split
+        var content = new VisualElement
+        {
+            style =
             {
-                flexDirection = FlexDirection.Row, marginTop = 8,
+                flexDirection = FlexDirection.Row,
+                marginTop = 8,
                 flexGrow = 1
             }
         };
 
-        // Left panel for settings
-        var left = new ScrollView(ScrollViewMode.Vertical) { style = { width = 320, marginRight = 8 } };
+        // Left panel (settings)
+        var left = new ScrollView(ScrollViewMode.Vertical)
+        {
+            style =
+            {
+                width = 320, 
+                marginRight = 8
+            }
+        };
 
-        sourceField = new ObjectField() { objectType = typeof(Texture2D) };
+        sourceField = new ObjectField()
+        {
+            objectType = typeof(Texture2D)
+        };
         sourceField.RegisterValueChangedCallback(changeEvent =>
         {
             SetSourceTextureFromAsset(sourceField.value as Texture2D);
-
             if (autoUpdate)
             {
                 GeneratePreview();
-            } 
+            }
         });
         left.Add(CreateLabeledRow("Source Texture", sourceField));
 
         textureStatsALabel = new Label("Left")
-            { style = { unityFontStyleAndWeight = FontStyle.Bold, marginTop = 24, paddingLeft = 16 } };
+        {
+            style =
+            {
+                unityFontStyleAndWeight = FontStyle.Bold,
+                marginTop = 24,
+                paddingLeft = 16
+            }
+        };
         left.Add(textureStatsALabel);
 
         maxSizeAField = new PopupField<int>(sizeOptions, sizeOptions.IndexOf(maxSizeA));
@@ -197,42 +220,49 @@ public class TextureCompressionViewerWindow : EditorWindow
             }
         });
         left.Add(CreateLabeledRow("Max Size", maxSizeAField));
-        
+
         formatAField = new PopupField<TextureImporterFormat>(CompressionFormats, CompressionFormats.IndexOf(formatA));
-        formatAField.RegisterValueChangedCallback(evt => { 
-            previewUpdateMode |= PreviewUpdateMode.A;
+        formatAField.RegisterValueChangedCallback(evt =>
+        {
             formatA = evt.newValue;
+            previewUpdateMode |= PreviewUpdateMode.A;
             if (autoUpdate)
             {
                 GeneratePreview();
             }
         });
         left.Add(CreateLabeledRow("Format", formatAField));
-        
-        compressionQualityA_Slider = new SliderInt(0, 100) { lowValue = 0, highValue = 100, value = compressionQualityA };
-        int pendingCompressionA = compressionQualityA;
 
-        compressionQualityA_Slider.RegisterValueChangedCallback(evt =>
+        compressionQualityASlider = new SliderInt(0, 100)
         {
-            pendingCompressionA = evt.newValue;
-        });
-        
-        compressionQualityA_Slider.RegisterCallback<PointerCaptureOutEvent>(evt =>
+            lowValue = 0, 
+            highValue = 100, 
+            value = compressionQualityA
+        };
+        int pendingCompressionA = compressionQualityA;
+        compressionQualityASlider.RegisterValueChangedCallback(evt => { pendingCompressionA = evt.newValue; });
+        compressionQualityASlider.RegisterCallback<PointerCaptureOutEvent>(_ =>
         {
             compressionQualityA = pendingCompressionA;
             previewUpdateMode |= PreviewUpdateMode.A;
-
             if (autoUpdate)
             {
                 GeneratePreview();
             }
         });
-        left.Add(CreateLabeledRow("Compression Quality", compressionQualityA_Slider));
+        left.Add(CreateLabeledRow("Compression Quality", compressionQualityASlider));
 
         textureStatsBLabel = new Label("Right")
-            { style = { unityFontStyleAndWeight = FontStyle.Bold, marginTop = 30, paddingLeft = 16 } };
+        {
+            style =
+            {
+                unityFontStyleAndWeight = FontStyle.Bold,
+                marginTop = 30,
+                paddingLeft = 16
+            }
+        };
         left.Add(textureStatsBLabel);
-        
+
         maxSizeBField = new PopupField<int>(sizeOptions, sizeOptions.IndexOf(maxSizeB));
         maxSizeBField.RegisterValueChangedCallback(evt =>
         {
@@ -244,29 +274,28 @@ public class TextureCompressionViewerWindow : EditorWindow
             }
         });
         left.Add(CreateLabeledRow("Max Size", maxSizeBField));
-        
+
         formatBField = new PopupField<TextureImporterFormat>(CompressionFormats, CompressionFormats.IndexOf(formatB));
         formatBField.RegisterValueChangedCallback(evt =>
         {
-            previewUpdateMode |= PreviewUpdateMode.B;
             formatB = evt.newValue;
-
+            previewUpdateMode |= PreviewUpdateMode.B;
             if (autoUpdate)
             {
                 GeneratePreview();
             }
         });
         left.Add(CreateLabeledRow("Format", formatBField));
-        
-        compressionQualityB_Slider = new SliderInt(0, 100) { lowValue = 0, highValue = 100, value = compressionQualityB };
-        int pendingCompressionB = compressionQualityB;
 
-        compressionQualityB_Slider.RegisterValueChangedCallback(evt =>
+        compressionQualityBSlider = new SliderInt(0, 100)
         {
-            pendingCompressionB = evt.newValue;
-        });
-        
-        compressionQualityB_Slider.RegisterCallback<PointerCaptureOutEvent>(evt =>
+            lowValue = 0, 
+            highValue = 100, 
+            value = compressionQualityB
+        };
+        int pendingCompressionB = compressionQualityB;
+        compressionQualityBSlider.RegisterValueChangedCallback(evt => { pendingCompressionB = evt.newValue; });
+        compressionQualityBSlider.RegisterCallback<PointerCaptureOutEvent>(_ =>
         {
             compressionQualityB = pendingCompressionB;
             previewUpdateMode |= PreviewUpdateMode.B;
@@ -275,11 +304,14 @@ public class TextureCompressionViewerWindow : EditorWindow
                 GeneratePreview();
             }
         });
-        left.Add(CreateLabeledRow("Compression Quality", compressionQualityB_Slider));
-        
+        left.Add(CreateLabeledRow("Compression Quality", compressionQualityBSlider));
+
         left.Add(CreateLabeledRow("", null));
-        
-        autoUpdateToggle = new Toggle { value = autoUpdate };
+
+        autoUpdateToggle = new Toggle
+        {
+            value = autoUpdate
+        };
         autoUpdateToggle.RegisterValueChangedCallback(evt =>
         {
             autoUpdate = evt.newValue;
@@ -288,9 +320,22 @@ public class TextureCompressionViewerWindow : EditorWindow
                 GeneratePreview();
             }
         });
-        
         left.Add(CreateLabeledRow("Auto Update Preview", autoUpdateToggle));
         
+        previewWithoutFilteringToggle = new Toggle
+        {
+            value = previewWithoutFiltering
+        };
+        previewWithoutFilteringToggle.RegisterValueChangedCallback(evt =>
+        {
+            previewWithoutFiltering = evt.newValue;
+            if (previewA != null) previewA.filterMode = previewWithoutFiltering ? FilterMode.Point : FilterMode.Bilinear;
+            if (previewB != null) previewB.filterMode = previewWithoutFiltering ? FilterMode.Point : FilterMode.Bilinear;
+
+            previewContainer.MarkDirtyRepaint();
+        });
+        left.Add(CreateLabeledRow("Unfiltered Preview", previewWithoutFilteringToggle));
+
         updateButton = new Button(() =>
         {
             previewUpdateMode = PreviewUpdateMode.A | PreviewUpdateMode.B;
@@ -304,16 +349,39 @@ public class TextureCompressionViewerWindow : EditorWindow
             }
         };
         left.Add(updateButton);
+        
+        var resetZoomButton = new Button(() =>
+        {
+            zoom = 1.0f;
+            previewContainer.MarkDirtyRepaint();
+        })
+        {
+            text = "Reset Zoom",
+            style = { marginLeft = 16, marginTop = 8 }
+        };
+        left.Add(resetZoomButton);
 
         content.Add(left);
 
-        // Right panel: preview
-        var right = new VisualElement { style = { flexGrow = 1 } };
-        previewContainer = new IMGUIContainer(() => { DrawPreviewIMGUI(); });
-        previewContainer.style.flexGrow = 1;
+        // Right preview panel
+        var right = new VisualElement
+        {
+            style =
+            {
+                flexGrow = 1
+            }
+        };
+        previewContainer = new IMGUIContainer(DrawPreviewIMGUI)
+        {
+            style =
+            {
+                flexGrow = 1
+            }
+        };
         previewContainer.RegisterCallback<PointerDownEvent>(OnPointerDownPreview);
         previewContainer.RegisterCallback<PointerMoveEvent>(OnPointerMovePreview);
         previewContainer.RegisterCallback<PointerUpEvent>(OnPointerUpPreview);
+        previewContainer.RegisterCallback<WheelEvent>(OnPreviewScrollWheel);
 
         right.Add(previewContainer);
         content.Add(right);
@@ -324,11 +392,11 @@ public class TextureCompressionViewerWindow : EditorWindow
     private void OnPointerDownPreview(PointerDownEvent evt)
     {
         var rect = previewContainer.contentRect;
-        float localX = evt.localPosition.x;
-        float w = rect.width;
-        float handleX = w * handlePos;
-        Rect handleRect = new Rect(handleX - 6, 0, 12, rect.height);
-        
+        var localX = evt.localPosition.x;
+        var w = rect.width;
+        var handleX = w * handlePos;
+        var handleRect = new Rect(handleX - 6, 0, 12, rect.height);
+
         if (handleRect.Contains(new Vector2(localX, evt.localPosition.y)))
         {
             dragging = true;
@@ -348,10 +416,10 @@ public class TextureCompressionViewerWindow : EditorWindow
         {
             return;
         }
-        
+
         var rect = previewContainer.contentRect;
-        float localX = evt.localPosition.x;
-        float w = rect.width;
+        var localX = evt.localPosition.x;
+        var w = rect.width;
         handlePos = Mathf.Clamp01(localX / w);
         previewContainer.MarkDirtyRepaint();
         evt.StopImmediatePropagation();
@@ -362,12 +430,20 @@ public class TextureCompressionViewerWindow : EditorWindow
         dragging = false;
     }
 
+    private void OnPreviewScrollWheel(WheelEvent evt)
+    {
+        var zoomDelta = -evt.delta.y * 0.1f;
+        zoom = Mathf.Clamp(zoom + zoomDelta, MinZoom, MaxZoom);
+        previewContainer.MarkDirtyRepaint();
+        evt.StopImmediatePropagation();
+    }
+
     private void DrawPreviewIMGUI()
     {
         var rect = GUILayoutUtility.GetRect(previewContainer.contentRect.width, previewContainer.contentRect.height);
         if (previewA == null || previewB == null)
         {
-            GUI.Label(new Rect(rect.x + 8, rect.y + 8, 600, 20), "No preview available." );
+            GUI.Label(new Rect(rect.x + 8, rect.y + 8, 600, 20), "No preview available.");
             return;
         }
 
@@ -376,143 +452,154 @@ public class TextureCompressionViewerWindow : EditorWindow
 
     private void DrawSplitPreview(Rect rect, Texture2D leftTex, Texture2D rightTex, float handle)
     {
-        float handleX = rect.x + rect.width * handle;
-        float h = rect.height;
-        float w = rect.width;
-        float leftWidth = Mathf.Clamp(handleX - rect.x, 0, w);
+        var handleX = rect.x + rect.width * handle;
+        var h = rect.height;
+        var w = rect.width;
 
-        // Draw B as full background
-        GUI.BeginGroup(rect);
-        if (rightTex != null)
+        // Zoom around the rect center in screen space
+        Vector2 pivot = rect.center;
+        var scaledW = w * zoom;
+        var scaledH = h * zoom;
+        var offsetX = pivot.x - (scaledW / 2f);
+        var offsetY = pivot.y - (scaledH / 2f);
+        Rect drawRect = new Rect(offsetX, offsetY, scaledW, scaledH);
+
+        var leftWidth  = Mathf.Clamp(handleX - rect.x, 0, w);
+        var rightWidth = Mathf.Clamp(rect.x + w - handleX, 0, w);
+
+        // LLeft - clip to left side, draw leftTex scaled around center
+        if (leftTex != null && leftWidth > 0f)
         {
-            Rect full = new Rect(0, 0, w, h);
-            GUI.DrawTexture(full, rightTex, ScaleMode.ScaleToFit);
+            GUI.BeginGroup(new Rect(rect.x, rect.y, leftWidth, h));
+            
+            // Convert drawRect to this group's local space
+            var local = new Rect(drawRect.x - rect.x, drawRect.y - rect.y, drawRect.width, drawRect.height);
+            GUI.DrawTexture(local, leftTex, ScaleMode.ScaleToFit, true);
+            GUI.EndGroup();
         }
 
-        // Draw A on top, clipped
-        GUI.BeginGroup(new Rect(0, 0, leftWidth, h));
-        if (leftTex != null)
+        // Right - clip to the right side, draw rightTex scaled around center
+        if (rightTex != null && rightWidth > 0f)
         {
-            Rect full = new Rect(0, 0, w, h);
-            GUI.DrawTexture(full, leftTex, ScaleMode.ScaleToFit);
+            GUI.BeginGroup(new Rect(handleX, rect.y, rightWidth, h));
+            var local = new Rect(drawRect.x - handleX, drawRect.y - rect.y, drawRect.width, drawRect.height);
+            GUI.DrawTexture(local, rightTex, ScaleMode.ScaleToFit, true);
+            GUI.EndGroup();
         }
-        GUI.EndGroup();
-        GUI.EndGroup();
 
-        // divider
+        // Divider line & cursor
         Handles.BeginGUI();
-        Color prev = Handles.color;
+        var previousHandleColor = Handles.color;
         Handles.color = Color.white;
         Handles.DrawLine(new Vector3(handleX, rect.y), new Vector3(handleX, rect.y + h));
-        Handles.color = prev;
+        Handles.color = previousHandleColor;
         Handles.EndGUI();
-        
+
         EditorGUIUtility.AddCursorRect(new Rect(handleX - 6, rect.y, 12, h), MouseCursor.ResizeHorizontal);
     }
 
-    private Texture2D ApplyImporterSettingsAndGetPreviewTexture(string assetPath, TextureImporterFormat format, Int32 maxSize, Int32 quality, out string statText)
+    private Texture2D ApplyImporterSettingsAndGetPreviewTexture(string assetPath, TextureImporterFormat format, int maxSize, int quality, out string statText)
     {
         statText = null;
-        TextureImporter texImp = AssetImporter.GetAtPath(assetPath) as TextureImporter;
+        var texImp = AssetImporter.GetAtPath(assetPath) as TextureImporter;
         if (texImp == null)
         {
             return null;
         }
-        
-        TextureImporterPlatformSettings plat = texImp.GetPlatformTextureSettings(PlatformName);
+
+        var plat = texImp.GetPlatformTextureSettings(PlatformName);
         plat.name = PlatformName;
         plat.overridden = true;
         plat.format = format;
         plat.maxTextureSize = maxSize;
         plat.compressionQuality = Mathf.Clamp(quality, 0, 100);
-        
+
         texImp.textureType = TextureImporterType.Default;
         texImp.SetPlatformTextureSettings(plat);
-        texImp.textureCompression = TextureImporterCompression.Compressed; 
+        texImp.textureCompression = TextureImporterCompression.Compressed;
         texImp.SaveAndReimport();
-        
+
         AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
         AssetDatabase.Refresh();
 
-        Texture2D reimported = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+        var reimported = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
         if (reimported == null)
         {
-            Debug.LogWarning("Failed to load reimported texture at " + assetPath); 
+            Debug.LogWarning("Failed to load reimported texture at " + assetPath);
             return null;
         }
         
+        reimported.filterMode = previewWithoutFiltering ? FilterMode.Point : FilterMode.Bilinear;
+
         var textureUtilType = typeof(Editor).Assembly.GetType("UnityEditor.TextureUtil");
-        
+
         MethodInfo getStorageMemorySizeLongMethod = textureUtilType?.GetMethod(
             "GetStorageMemorySizeLong",
             BindingFlags.Static | BindingFlags.Public
         );
         var result = (long)getStorageMemorySizeLongMethod.Invoke(null, new object[] { reimported });
         var formattedBytes = EditorUtility.FormatBytes(result);
-        
+
         MethodInfo getTextureFormatMethod = textureUtilType?.GetMethod(
             "GetTextureFormat",
             BindingFlags.Static | BindingFlags.Public
         );
         var texFormat = (TextureFormat)getTextureFormatMethod.Invoke(null, new[] { reimported });
-        
-        statText = $"{reimported.width}x{reimported.height} {texFormat.ToString()} {formattedBytes}";
-        
+
+        statText = $"{reimported.width}x{reimported.height} {texFormat} {formattedBytes}";
+
         return reimported;
     }
 
     private void GeneratePreview()
     {
-        if (previewUpdateMode == PreviewUpdateMode.None)
-        {
-            return;
-        }
-        
+        if (previewUpdateMode == PreviewUpdateMode.None) return;
+
         if (sourceTexture == null)
         {
             EditorUtility.DisplayDialog("No source", "Please select a source texture first.", "OK");
             return;
         }
-        
-        string srcPath = AssetDatabase.GetAssetPath(sourceTexture);
+
+        var srcPath = AssetDatabase.GetAssetPath(sourceTexture);
         if (string.IsNullOrEmpty(srcPath))
         {
             EditorUtility.DisplayDialog("Invalid asset", "Selected texture is not a valid asset in the project.", "OK");
             return;
         }
-        
+
         prevImportCompressSetKeys.Clear();
         foreach (var k in compressPrefKeys)
         {
             prevImportCompressSetKeys[k] = (EditorPrefs.HasKey(k)) && EditorPrefs.GetBool(k);
             EditorPrefs.SetBool(k, true);
         }
-        
-        if (!AssetDatabase.IsValidFolder(tempFolder))
+
+        if (!AssetDatabase.IsValidFolder(TempFolder))
         {
-            AssetDatabase.CreateFolder(tempFolderParent, tempFolderName);
+            AssetDatabase.CreateFolder(TempFolderParent, TempFolderName);
         }
 
-        string ext = Path.GetExtension(srcPath);
-        tempAPath = tempFolder + "/A" + ext;
-        tempBPath = tempFolder + "/B" + ext;
-        
+        var ext = Path.GetExtension(srcPath);
+        tempAPath = TempFolder + "/A" + ext;
+        tempBPath = TempFolder + "/B" + ext;
+
         if ((previewUpdateMode & PreviewUpdateMode.A) != 0)
         {
             if (AssetDatabase.LoadAssetAtPath<Texture2D>(tempAPath) != null)
             {
                 AssetDatabase.DeleteAsset(tempAPath);
             }
-            
+
             if (!AssetDatabase.CopyAsset(srcPath, tempAPath))
             {
                 return;
             }
-            
+
             previewA = ApplyImporterSettingsAndGetPreviewTexture(tempAPath, formatA, maxSizeA, compressionQualityA, out var statsTextA);
             textureStatsALabel.text = $"Left: {statsTextA}";
         }
-        
+
         if ((previewUpdateMode & PreviewUpdateMode.B) != 0)
         {
             if (AssetDatabase.LoadAssetAtPath<Texture2D>(tempBPath) != null)
@@ -550,7 +637,6 @@ public class TextureCompressionViewerWindow : EditorWindow
                 AssetDatabase.DeleteAsset(tempAPath);
                 cleanupChangesPresent = true;
             }
-
             tempAPath = null;
             previewA = null;
         }
@@ -562,14 +648,13 @@ public class TextureCompressionViewerWindow : EditorWindow
                 AssetDatabase.DeleteAsset(tempBPath);
                 cleanupChangesPresent = true;
             }
-
             tempBPath = null;
             previewB = null;
         }
 
-        if (AssetDatabase.IsValidFolder(tempFolder))
+        if (AssetDatabase.IsValidFolder(TempFolder))
         {
-            AssetDatabase.DeleteAsset(tempFolder);
+            AssetDatabase.DeleteAsset(TempFolder);
             cleanupChangesPresent = true;
         }
 
@@ -583,29 +668,23 @@ public class TextureCompressionViewerWindow : EditorWindow
     private void SetSourceTextureFromAsset(Texture2D tex)
     {
         previewUpdateMode = PreviewUpdateMode.A | PreviewUpdateMode.B;
-        
+
         sourceTexture = tex;
         if (sourceField == null)
         {
             return;
-            
         }
-        
         sourceField.value = tex;
 
-        // Attempt to read importer settings and use them as initial preview settings
-        string path = AssetDatabase.GetAssetPath(tex);
+        var path = AssetDatabase.GetAssetPath(tex);
         if (string.IsNullOrEmpty(path))
         {
             return;
         }
-        
+
         var texImp = AssetImporter.GetAtPath(path) as TextureImporter;
-        if (texImp == null)
-        {
-            return;
-        }
-        
+        if (texImp == null) return;
+
         var platformSettings = texImp.GetPlatformTextureSettings(PlatformName);
         if (platformSettings is { overridden: true })
         {
@@ -620,11 +699,14 @@ public class TextureCompressionViewerWindow : EditorWindow
             formatA = formatB = TextureImporterFormat.Automatic;
         }
 
-        maxSizeAField.value = maxSizeBField.value = maxSizeA;
-        compressionQualityA_Slider.value = compressionQualityB_Slider.value = compressionQualityA;
-        formatAField.value = formatBField.value = formatA;
+        maxSizeAField.value = maxSizeA;
+        maxSizeBField.value = maxSizeB;
+        compressionQualityASlider.value = compressionQualityA;
+        compressionQualityBSlider.value = compressionQualityB;
+        formatAField.value = formatA;
+        formatBField.value = formatB;
     }
-    
+
     private VisualElement CreateLabeledRow(string labelText, VisualElement fieldElement, int labelWidth = 130, float spacing = 4)
     {
         var row = new VisualElement
@@ -636,8 +718,6 @@ public class TextureCompressionViewerWindow : EditorWindow
                 marginTop = 2,
                 marginBottom = 2,
                 paddingLeft = 16,
-                paddingTop = 0,
-                paddingBottom = 0
             }
         };
 
@@ -647,23 +727,17 @@ public class TextureCompressionViewerWindow : EditorWindow
             {
                 width = labelWidth,
                 unityTextAlign = TextAnchor.MiddleLeft,
-                marginRight = spacing,
-                paddingTop = 0,
-                paddingBottom = 0
+                marginRight = spacing
             }
         };
 
         row.Add(label);
-        
+
         if (fieldElement != null)
         {
             fieldElement.style.flexGrow = 1;
             fieldElement.style.flexShrink = 1;
             fieldElement.style.flexBasis = 0;
-            fieldElement.style.marginTop = 0;
-            fieldElement.style.marginBottom = 0;
-            fieldElement.style.paddingTop = 0;
-            fieldElement.style.paddingBottom = 0;
             row.Add(fieldElement);
         }
 
